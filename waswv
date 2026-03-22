@@ -1,3 +1,59 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$SCRIPT_DIR/src/waswv.py" "$@"
+VENV_DIR="$SCRIPT_DIR/.venv"
+REQUIREMENTS_FILE="$SCRIPT_DIR/requirements.txt"
+
+venv_python_bin() {
+    if [[ -x "$VENV_DIR/bin/python3" ]]; then
+        printf '%s\n' "$VENV_DIR/bin/python3"
+    elif [[ -x "$VENV_DIR/bin/python" ]]; then
+        printf '%s\n' "$VENV_DIR/bin/python"
+    elif [[ -x "$VENV_DIR/Scripts/python.exe" ]]; then
+        printf '%s\n' "$VENV_DIR/Scripts/python.exe"
+    elif [[ -x "$VENV_DIR/Scripts/python" ]]; then
+        printf '%s\n' "$VENV_DIR/Scripts/python"
+    else
+        return 1
+    fi
+}
+
+ensure_venv() {
+    if [[ ! -d "$VENV_DIR" ]]; then
+        echo "Creating virtual environment in $VENV_DIR"
+        python3 -m venv "$VENV_DIR"
+    fi
+}
+
+ensure_requirements() {
+    local venv_python stamp_file
+    venv_python="$(venv_python_bin)"
+    stamp_file="$VENV_DIR/.requirements.sha256"
+
+    if [[ ! -f "$REQUIREMENTS_FILE" ]]; then
+        return
+    fi
+
+    local current_hash previous_hash
+    current_hash="$(python3 - "$REQUIREMENTS_FILE" <<'PYHASH'
+from pathlib import Path
+import hashlib
+import sys
+print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PYHASH
+)"
+    previous_hash="$(cat "$stamp_file" 2>/dev/null || true)"
+
+    if [[ "$current_hash" != "$previous_hash" ]]; then
+        echo "Installing dependencies from $REQUIREMENTS_FILE"
+        "$venv_python" -m pip install --upgrade pip
+        "$venv_python" -m pip install -r "$REQUIREMENTS_FILE"
+        printf '%s\n' "$current_hash" > "$stamp_file"
+    fi
+}
+
+ensure_venv
+ensure_requirements
+VENV_PYTHON="$(venv_python_bin)"
+exec "$VENV_PYTHON" "$SCRIPT_DIR/src/waswv.py" "$@"
