@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import audioop
 import math
 import struct
 import sys
@@ -42,11 +41,11 @@ def load_wave_file(path: Path) -> WaveformData:
         frame_count = wav_file.getnframes()
         raw_frames = wav_file.readframes(frame_count)
 
-    mono_frames = audioop.tomono(raw_frames, sample_width, 0.5, 0.5) if channels >= 2 else raw_frames
-    samples = decode_samples(mono_frames, sample_width)
-    if not samples:
+    channel_samples = decode_samples(raw_frames, sample_width)
+    if not channel_samples:
         raise ValueError("No audio samples were found in the file.")
 
+    samples = mix_to_mono(channel_samples, channels)
     peak = max(abs(sample) for sample in samples)
     rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
     zero_crossings = sum(
@@ -93,6 +92,18 @@ def decode_samples(raw_frames: bytes, sample_width: int) -> list[float]:
         values = struct.unpack(f"<{count}i", raw_frames)
         return [value / 2147483648.0 for value in values]
     raise ValueError(f"Unsupported sample width: {sample_width} bytes")
+
+
+def mix_to_mono(samples: list[float], channels: int) -> list[float]:
+    if channels <= 1:
+        return samples
+
+    mono_samples = []
+    for index in range(0, len(samples), channels):
+        frame = samples[index:index + channels]
+        if frame:
+            mono_samples.append(sum(frame) / len(frame))
+    return mono_samples
 
 
 def build_waveform_points(samples: list[float], sample_rate: int) -> list[tuple[float, float]]:
@@ -145,7 +156,7 @@ class WaveformApp:
 
         tips = tk.Label(
             self.info_frame,
-            text="Tips:\n• Use waswv <path_to_sound_file>\n• Drag the file picker to inspect another WAV\n• This zero-dependency build supports WAV input",
+            text="Tips:\n• Use waswv <path_to_sound_file>\n• Use Open audio file to inspect another WAV\n• This build avoids deprecated audioop usage",
             justify=tk.LEFT,
             anchor="nw",
         )
