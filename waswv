@@ -4,6 +4,76 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
 REQUIREMENTS_FILE="$SCRIPT_DIR/requirements.txt"
+PLATFORM="unknown"
+DISTRO_ID=""
+DISTRO_LIKE=""
+
+detect_platform() {
+    local uname_value
+    uname_value="$(uname -s 2>/dev/null || printf 'unknown')"
+    case "$uname_value" in
+        Linux*)
+            PLATFORM="linux"
+            ;;
+        Darwin*)
+            PLATFORM="macos"
+            ;;
+        CYGWIN*|MINGW*|MSYS*)
+            PLATFORM="windows"
+            ;;
+        *)
+            PLATFORM="unknown"
+            ;;
+    esac
+}
+
+load_linux_release_data() {
+    if [[ "$PLATFORM" != "linux" || ! -r /etc/os-release ]]; then
+        return
+    fi
+
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    DISTRO_ID="${ID:-}"
+    DISTRO_LIKE="${ID_LIKE:-}"
+}
+
+run_host_python() {
+    if command -v python3 >/dev/null 2>&1; then
+        python3 "$@"
+        return
+    fi
+
+    if command -v python >/dev/null 2>&1; then
+        python "$@"
+        return
+    fi
+
+    if [[ "$PLATFORM" == "windows" ]] && command -v py >/dev/null 2>&1; then
+        py -3 "$@"
+        return
+    fi
+
+    cat <<'EOF' >&2
+Python was not found on PATH.
+Install Python 3.12+ and rerun this launcher.
+EOF
+    exit 1
+}
+
+run_as_admin() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        "$@"
+        return
+    fi
+
+    if command -v sudo >/dev/null 2>&1 && [[ -t 0 && -t 1 ]]; then
+        sudo "$@"
+        return
+    fi
+
+    return 1
+}
 
 venv_python_bin() {
     if [[ -x "$VENV_DIR/bin/python3" ]]; then
@@ -22,7 +92,17 @@ venv_python_bin() {
 ensure_venv() {
     if [[ ! -d "$VENV_DIR" ]]; then
         echo "Creating virtual environment in $VENV_DIR"
-        python3 -m venv "$VENV_DIR"
+        run_host_python -m venv "$VENV_DIR"
+    fi
+}
+
+ensure_venv_pip() {
+    local venv_python
+    venv_python="$(venv_python_bin)"
+
+    if ! "$venv_python" -m pip --version >/dev/null 2>&1; then
+        echo "Bootstrapping pip in $VENV_DIR"
+        "$venv_python" -m ensurepip --upgrade
     fi
 }
 
@@ -36,7 +116,7 @@ ensure_requirements() {
     fi
 
     local current_hash previous_hash
-    current_hash="$(python3 - "$REQUIREMENTS_FILE" <<'PYHASH'
+    current_hash="$(run_host_python - "$REQUIREMENTS_FILE" <<'PYHASH'
 from pathlib import Path
 import hashlib
 import sys
@@ -47,13 +127,152 @@ PYHASH
 
     if [[ "$current_hash" != "$previous_hash" ]]; then
         echo "Installing dependencies from $REQUIREMENTS_FILE"
+        ensure_venv_pip
         "$venv_python" -m pip install --upgrade pip
         "$venv_python" -m pip install -r "$REQUIREMENTS_FILE"
         printf '%s\n' "$current_hash" > "$stamp_file"
     fi
 }
 
+install_tkinter_linux() {
+    if [[ -z "$DISTRO_ID" && -z "$DISTRO_LIKE" ]]; then
+        return 1
+    fi
+
+    if command -v apt-get >/dev/null 2>&1 && [[ "$DISTRO_ID" == "ubuntu" || "$DISTRO_ID" == "debian" || "$DISTRO_LIKE" == *debian* ]]; then
+        echo "Installing system package python3-tk"
+        run_as_admin env DEBIAN_FRONTEND=noninteractive apt-get install -y python3-tk
+        return
+    fi
+
+    if command -v dnf >/dev/null 2>&1; then
+        echo "Installing system package python3-tkinter"
+        run_as_admin dnf install -y python3-tkinter
+        return
+    fi
+
+    if command -v yum >/dev/null 2>&1; then
+        echo "Installing system package python3-tkinter"
+        run_as_admin yum install -y python3-tkinter
+        return
+    fi
+
+    if command -v pacman >/dev/null 2>&1; then
+        echo "Installing system package tk"
+        run_as_admin pacman -S --needed --noconfirm tk
+        return
+    fi
+
+    if command -v zypper >/dev/null 2>&1; then
+        echo "Installing system package python3-tk"
+        run_as_admin zypper --non-interactive install python3-tk
+        return
+    fi
+
+    if command -v apk >/dev/null 2>&1; then
+        echo "Installing system package python3-tkinter"
+        run_as_admin apk add python3-tkinter
+        return
+    fi
+
+    return 1
+}
+
+install_tkinter_macos() {
+    local python_version
+
+    if ! command -v brew >/dev/null 2>&1; then
+        return 1
+    fi
+
+    python_version="$(run_host_python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    if brew info "python-tk@$python_version" >/dev/null 2>&1; then
+        echo "Installing Homebrew formula python-tk@$python_version"
+        brew install "python-tk@$python_version"
+        return
+    fi
+
+    if brew info python-tk >/dev/null 2>&1; then
+        echo "Installing Homebrew formula python-tk"
+        brew install python-tk
+        return
+    fi
+
+    return 1
+}
+
+install_system_tkinter() {
+    case "$PLATFORM" in
+        linux)
+            install_tkinter_linux
+            ;;
+        macos)
+            install_tkinter_macos
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+tkinter_manual_help() {
+    case "$PLATFORM" in
+        linux)
+            cat <<'EOF'
+Linux package suggestions:
+  Debian/Ubuntu: sudo apt install python3-tk
+  Fedora/RHEL: sudo dnf install python3-tkinter
+  Arch: sudo pacman -S tk
+EOF
+            ;;
+        macos)
+            cat <<'EOF'
+macOS options:
+  Install the official python.org build, which bundles Tk support, or
+  install a matching Homebrew Tk formula such as `brew install python-tk@3.12`.
+EOF
+            ;;
+        windows)
+            cat <<'EOF'
+Windows options:
+  Install the official CPython build from python.org, which includes Tk,
+  then recreate the virtual environment and rerun this launcher.
+  Native Windows users can also start the app with `waswv.cmd`.
+EOF
+            ;;
+        *)
+            cat <<'EOF'
+Install a Python 3 build that includes Tk support, then recreate the virtual environment.
+EOF
+            ;;
+    esac
+}
+
+ensure_tkinter() {
+    local venv_python
+    venv_python="$(venv_python_bin)"
+
+    if ! "$venv_python" -c "import tkinter" >/dev/null 2>&1; then
+        echo "Missing Python Tk support; attempting an OS-specific install"
+        if install_system_tkinter && "$venv_python" -c "import tkinter" >/dev/null 2>&1; then
+            return
+        fi
+
+        cat <<EOF >&2
+Missing Python Tk support (`tkinter`).
+Automatic installation failed or is not supported on this system.
+Detected platform: $PLATFORM
+Install Tk support for the base interpreter, then rerun this launcher.
+EOF
+        tkinter_manual_help >&2
+        exit 1
+    fi
+}
+
+detect_platform
+load_linux_release_data
 ensure_venv
 ensure_requirements
+ensure_tkinter
 VENV_PYTHON="$(venv_python_bin)"
 exec "$VENV_PYTHON" "$SCRIPT_DIR/src/waswv.py" "$@"

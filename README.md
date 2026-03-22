@@ -10,6 +10,12 @@ Run:
 ./waswv <path_to_sound_file>
 ```
 
+On native Windows shells, use:
+
+```bat
+waswv.cmd <path_to_sound_file>
+```
+
 A desktop window opens and shows:
 
 - the waveform for the sound file,
@@ -34,6 +40,7 @@ The current build supports **WAV** input files and no longer relies on the depre
 - [x] Automatically creates a virtual environment
 - [x] Automatically installs dependencies from `requirements.txt`
 - [x] Automatically reuses the same project virtual environment
+- [x] Platform-aware launchers for Unix-like shells and native Windows
 
 ## Run locally
 
@@ -41,11 +48,16 @@ The current build supports **WAV** input files and no longer relies on the depre
 ./waswv path/to/file.wav
 ```
 
+```bat
+waswv.cmd path\to\file.wav
+```
+
 On the first run, the launcher will:
 
 1. create `.venv` in the project root if it does not already exist,
 2. install dependencies from `requirements.txt`, and
-3. launch the app with that same environment.
+3. detect the current platform and check for Tk support, and
+4. launch the app with that same environment.
 
 If `requirements.txt` changes later, `./waswv` will detect the change and reinstall the dependencies into the same `.venv` automatically.
 
@@ -64,6 +76,18 @@ python3 -m pip install -r requirements.txt
 ```
 
 The current `requirements.txt` is intentionally empty because the app only depends on Python's standard library, but the launcher still bootstraps and reuses the virtual environment so future dependencies can be added without changing how you start the app.
+
+`tkinter` is not managed by `pip`, so it cannot be added through `requirements.txt`. The launchers detect the current OS and take different steps:
+
+- Linux: try the detected system package manager (`apt`, `dnf`, `yum`, `pacman`, `zypper`, `apk`)
+- macOS: try Homebrew if it is installed
+- Windows: report that Tk must come from the base CPython installation and suggest the native `waswv.cmd` launcher when appropriate
+
+If automatic setup cannot run, install Tk support manually. On Ubuntu/Debian that is:
+
+```bash
+sudo apt install python3-tk
+```
 
 ## Packaging ideas
 

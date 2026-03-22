@@ -1,1 +1,4 @@
 # No third-party Python packages are required for the current Tkinter/WAV implementation.
+# `tkinter` is not installable from `pip` or `requirements.txt`.
+# It must be available in the base Python build used to create `.venv`.
+# On Ubuntu/Debian, install it with: sudo apt install python3-tk
